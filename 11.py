@@ -14,7 +14,7 @@ class MarketAnalyzer:
     using candlestick bars.
     """
 
-    def __init__(self, symbol="BTC-USD", interval="1d", period="1y",
+    def __init__(self, symbol="BTC-USD", interval="1y", period="1d",
                  rsi_window=14, pivot_order=4,
                  rsi_levels=None):
         """
@@ -162,24 +162,31 @@ class MarketAnalyzer:
         Parameters:
             atr_multiplier (float): The multiplier for the ATR threshold (default: 1.0).
         """
-        # Loop over the DataFrame (skip first and last row).
+        # Loop over the DataFrame, skipping the first and last rows.
         for i in range(1, len(self.df) - 1):
             # Validate high pivot.
-            if not np.isnan(self.df.loc[self.df.index[i], 'high_pivot']):
-                prev_high = self.df.loc[self.df.index[i - 1], 'high']
-                next_high = self.df.loc[self.df.index[i + 1], 'high']
-                local_diff = self.df.loc[self.df.index[i], 'high_pivot'] - max(prev_high, next_high)
-                if local_diff < atr_multiplier * self.df.loc[self.df.index[i], 'atr']:
-                    self.df.at[self.df.index[i], 'high_pivot'] = np.nan
-            # Validate low pivot.
-            if not np.isnan(self.df.loc[self.df.index[i], 'low_pivot']):
-                prev_low = self.df.loc[self.df.index[i - 1], 'low']
-                next_low = self.df.loc[self.df.index[i + 1], 'low']
-                local_diff = min(prev_low, next_low) - self.df.loc[self.df.index[i], 'low_pivot']
-                if local_diff < atr_multiplier * self.df.loc[self.df.index[i], 'atr']:
-                    self.df.at[self.df.index[i], 'low_pivot'] = np.nan
+            if not np.isnan(self.df["high_pivot"].values[i]):
+                # Use the higher of the two neighboring highs.
 
-        # Update pivot_data with validated pivots.
+                # If the pivot is not significantly higher than its neighbor, invalidate it.
+                if self.df["high_pivot"].values[i] - self.df["low"].values[i + 1] < atr_multiplier * self.df["atr"].values[i]:
+                    self.df.at[self.df.index[i], "high_pivot"] = np.nan
+                    break
+                elif self.df["high_pivot"].values[i] - self.df["low"].values[i + 2]  < atr_multiplier * self.df["atr"].values[i]:
+                    self.df.at[self.df.index[i], "high_pivot"] = np.nan
+                elif self.df["high_pivot"].values[i] - self.df["low"].values[i + 3] < atr_multiplier * self.df["atr"].values[i]:
+                    self.df.at[self.df.index[i], "high_pivot"] = np.nan
+
+
+            # Validate low pivot.
+            if not np.isnan(self.df["low_pivot"].values[i]):
+                # Use the lower of the two neighboring lows.
+                neighbor = min(self.df["low"].values[i - 1], self.df["low"].values[i + 1])
+                # If the pivot is not significantly lower than its neighbor, invalidate it.
+                if neighbor - self.df["low_pivot"].values[i] < atr_multiplier * self.df["atr"].values[i]:
+                    self.df.at[self.df.index[i], "low_pivot"] = np.nan
+
+        # Update pivot_data with the newly validated pivot points.
         self.pivot_data = self.df[['timestamp', 'high_pivot', 'low_pivot', 'rsi_high_pivot', 'rsi_low_pivot']].dropna(
             how='all')
 
