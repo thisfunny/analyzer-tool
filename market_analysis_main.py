@@ -8,9 +8,7 @@ def main():
         "period": "5y",
         "rsi_levels": [12, 14, 31, 35, 49, 51, 64, 68, 86, 88],
         "pivot_order": 4,
-        # Specify multiple RSI windows.
         "rsi_windows": [14, 8, 20],
-        # Set the primary RSI window (used for signals, pivots, etc.)
         "primary_rsi_window": 14
     }
 
@@ -26,6 +24,9 @@ def main():
     analyzer.detect_divergences()
     analyzer.detect_engulfing()
     analyzer.detect_pinbar()
+
+    # Merge analyses: check for combined conditions (pinbar+RSI, divergence+RSI+pivot, engulfing+divergence)
+    analyzer.merge_analysis(tolerance=3)
     analyzer.save_whole_df_to_csv()
     analyzer.plot_results()
 

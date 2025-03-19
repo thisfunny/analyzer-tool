@@ -19,7 +19,7 @@ class Synthesis:
         self.period = config.get("period", "1y")
         self.rsi_levels = config.get("rsi_levels", [12, 14, 31, 35, 49, 51, 64, 68, 86, 88])
         self.pivot_order = config.get("pivot_order", 4)
-        # New parameters: support for multiple RSI windows.
+        # Support for multiple RSI windows.
         self.rsi_windows = config.get("rsi_windows", [14])
         self.primary_rsi_window = config.get("primary_rsi_window", self.rsi_windows[0])
 
@@ -88,6 +88,7 @@ class Synthesis:
     def compute_pivots(self):
         """
         Compute price and RSI pivot points.
+        (Uses the primary RSI in self.df['rsi'] for RSI pivots.)
         """
         self.df['high_pivot'] = np.nan
         self.df['low_pivot'] = np.nan
@@ -113,34 +114,36 @@ class Synthesis:
         Validate price pivots using an ATR-based threshold.
         """
         for i in range(1, len(self.df) - 3):
-            # Validate high pivot.
             atr = self.df['atr'].values[i]
             neighbor = max(self.df["open"].values[i + 1], self.df["close"].values[i + 1])
             if not np.isnan(self.df["high_pivot"].values[i]):
-                if self.df["high"].values[i] - self.df["close"].values[i] >= atr*0.8:
+                if self.df["high"].values[i] - self.df["close"].values[i] >= atr * 0.8:
                     continue
-                elif self.df["high_pivot"].values[i] - min(self.df["open"].values[i + 1], self.df["close"].values[i + 1]) >= atr*0.8:
+                elif self.df["high_pivot"].values[i] - min(self.df["open"].values[i + 1],
+                                                           self.df["close"].values[i + 1]) >= atr * 0.8:
                     continue
-                elif self.df["high_pivot"].values[i] - min(self.df["open"].values[i + 2], self.df["close"].values[i + 2]) >= atr*0.8:
+                elif self.df["high_pivot"].values[i] - min(self.df["open"].values[i + 2],
+                                                           self.df["close"].values[i + 2]) >= atr * 0.8:
                     continue
-                elif self.df["high_pivot"].values[i] - min(self.df["open"].values[i + 3], self.df["close"].values[i + 3]) < atr*0.8:
+                elif self.df["high_pivot"].values[i] - min(self.df["open"].values[i + 3],
+                                                           self.df["close"].values[i + 3]) < atr * 0.8:
                     self.df.at[self.df.index[i], "high_pivot"] = np.nan
                 else:
                     continue
 
-            # Validate low pivot.
             if not np.isnan(self.df["low_pivot"].values[i]):
-                if self.df["close"].values[i] - self.df["low"].values[i] >= atr*0.8:
+                if self.df["close"].values[i] - self.df["low"].values[i] >= atr * 0.8:
                     continue
-                elif neighbor - self.df["low_pivot"].values[i] >= atr*0.8:
+                elif neighbor - self.df["low_pivot"].values[i] >= atr * 0.8:
                     continue
-                elif max(self.df["open"].values[i + 2], self.df["close"].values[i + 2]) - self.df["low_pivot"].values[i] >= atr*0.8:
+                elif max(self.df["open"].values[i + 2], self.df["close"].values[i + 2]) - self.df["low_pivot"].values[
+                    i] >= atr * 0.8:
                     continue
-                elif max(self.df["open"].values[i + 3], self.df["close"].values[i + 3]) - self.df["low_pivot"].values[i] < atr*0.8:
+                elif max(self.df["open"].values[i + 3], self.df["close"].values[i + 3]) - self.df["low_pivot"].values[
+                    i] < atr * 0.8:
                     self.df.at[self.df.index[i], "low_pivot"] = np.nan
                 else:
                     continue
-
 
         self.pivot_data = self.df[['timestamp', 'high_pivot', 'low_pivot', 'rsi_high_pivot', 'rsi_low_pivot']].dropna(
             how='all')
@@ -156,17 +159,19 @@ class Synthesis:
 
 class Integration(Synthesis):
     """
-    Extends Synthesis with methods for detecting signals, divergences, engulfing, pinbars, and plotting.
+    Extends Synthesis with methods for detecting signals, divergences, engulfing, pinbars,
+    merging analyses, and plotting.
     """
 
     def __init__(self, config):
         super().__init__(config)
         self.bullish_divergences = []
         self.bearish_divergences = []
+        self.multi_rsi_divergences = {}
 
     def detect_signals(self):
         """
-        Detect buy and sell signals based on RSI crossing predefined levels.
+        Detect buy and sell signals based on the primary RSI crossing predefined levels.
         """
         self.df['signal'] = None
         self.df['signal_price'] = np.nan
@@ -242,7 +247,7 @@ class Integration(Synthesis):
 
     def detect_divergences(self):
         """
-        Detect bullish and bearish divergences using pivot data.
+        Detect bullish and bearish divergences using pivot data (primary RSI).
         """
         self.pivot_data['timestamp'] = pd.to_datetime(self.pivot_data['timestamp'])
 
@@ -262,24 +267,71 @@ class Integration(Synthesis):
         print("Bullish Divergences detected at timestamps:", self.bullish_divergences)
         print("Bearish Divergences detected at timestamps:", self.bearish_divergences)
 
+    # --- NEW METHODS FOR MULTI-RSI DIVERGENCE (as before) ---
+    def compute_rsi_pivots_for_window(self, window):
+        """
+        Compute RSI pivot points for a specific RSI window.
+        The RSI column is assumed to be named 'rsi_{window}'.
+        Returns a DataFrame with columns: timestamp, rsi_{window}_high_pivot, rsi_{window}_low_pivot.
+        """
+        col = f'rsi_{window}'
+        self.df[f'{col}_high_pivot'] = np.nan
+        self.df[f'{col}_low_pivot'] = np.nan
+        rsi_series = self.df[col].values
+        high_idx = argrelextrema(rsi_series, np.greater, order=self.pivot_order)[0]
+        low_idx = argrelextrema(rsi_series, np.less, order=self.pivot_order)[0]
+        self.df.loc[self.df.index[high_idx], f'{col}_high_pivot'] = self.df.iloc[high_idx][col].values
+        self.df.loc[self.df.index[low_idx], f'{col}_low_pivot'] = self.df.iloc[low_idx][col].values
+        rsi_pivot_df = self.df[['timestamp', f'{col}_high_pivot', f'{col}_low_pivot']].dropna(how='all')
+        return rsi_pivot_df
+
+    def detect_divergences_multi_rsi(self):
+        """
+        Detect divergences for each RSI window specified in self.rsi_windows.
+        For each RSI window, compute its pivot points and compare them with price pivots.
+        Results are stored in self.multi_rsi_divergences as a dictionary keyed by RSI window.
+        """
+        price_pivots = self.df[['timestamp', 'high_pivot', 'low_pivot']].dropna(how='all').copy()
+        price_low_pivots = price_pivots[['timestamp', 'low_pivot']]
+        price_high_pivots = price_pivots[['timestamp', 'high_pivot']]
+        divergences = {}
+        for window in self.rsi_windows:
+            col = f'rsi_{window}'
+            rsi_pivot_df = self.compute_rsi_pivots_for_window(window)
+            # Rename columns for compatibility.
+            rsi_low_pivots = rsi_pivot_df[['timestamp', f'{col}_low_pivot']].rename(
+                columns={f'{col}_low_pivot': 'rsi_low_pivot'})
+            rsi_high_pivots = rsi_pivot_df[['timestamp', f'{col}_high_pivot']].rename(
+                columns={f'{col}_high_pivot': 'rsi_high_pivot'})
+            div_low = self.check_divergence(price_low_pivots, rsi_low_pivots, pivot_type='low')
+            div_high = self.check_divergence(price_high_pivots, rsi_high_pivots, pivot_type='high')
+            divergences[window] = {'bullish': div_low, 'bearish': div_high}
+        print("Multi-RSI Divergences detected:")
+        for window, div in divergences.items():
+            print(f"RSI window {window}: Bullish: {div['bullish']}, Bearish: {div['bearish']}")
+        self.multi_rsi_divergences = divergences
+
     def detect_engulfing(self):
         """
         Detect bullish and bearish engulfing candlestick patterns.
         Bullish: Previous candle red, current candle green with current body engulfing previous body.
         Bearish: Previous candle green, current candle red with current body engulfing previous body.
         """
-
         self.df['engulfing'] = None
         engulfing_signals = []
         for i in range(1, len(self.df)):
             # Bullish engulfing
-            if (self.df['open'].values[i - 1] > self.df['close'].values[i - 1]) and (self.df['open'].values[i] < self.df['close'].values[i]):
-                if (self.df['open'].values[i] < self.df['close'].values[i - 1]) and (self.df['close'].values[i] > self.df['open'].values[i - 1]):
+            if (self.df['open'].values[i - 1] > self.df['close'].values[i - 1]) and (
+                    self.df['open'].values[i] < self.df['close'].values[i]):
+                if (self.df['open'].values[i] < self.df['close'].values[i - 1]) and (
+                        self.df['close'].values[i] > self.df['open'].values[i - 1]):
                     self.df.at[self.df.index[i], 'engulfing'] = 'bullish'
                     engulfing_signals.append(self.df['timestamp'].values[i])
             # Bearish engulfing
-            if (self.df['open'].values[i - 1] < self.df['close'].values[i - 1]) and (self.df['open'].values[i] > self.df['close'].values[i]):
-                if (self.df['open'].values[i] > self.df['close'].values[i - 1]) and (self.df['close'].values[i] < self.df['open'].values[i - 1]):
+            if (self.df['open'].values[i - 1] < self.df['close'].values[i - 1]) and (
+                    self.df['open'].values[i] > self.df['close'].values[i]):
+                if (self.df['open'].values[i] > self.df['close'].values[i - 1]) and (
+                        self.df['close'].values[i] < self.df['open'].values[i - 1]):
                     self.df.at[self.df.index[i], 'engulfing'] = 'bearish'
                     engulfing_signals.append(self.df['timestamp'].values[i])
         self.engulfing_signals = engulfing_signals
@@ -302,15 +354,12 @@ class Integration(Synthesis):
             body = abs(close_price - open_price)
             if body == 0:
                 continue
-            # Determine wick sizes.
             lower_wick = min(open_price, close_price) - low
             upper_wick = high - max(open_price, close_price)
-            # Bullish pinbar: long lower wick and a relatively small upper wick.
-            if atr*0.8< (high - low) > 1.2*atr:
+            if atr * 0.8 < (high - low) > 1.2 * atr:
                 if lower_wick > 3 * body and upper_wick < 0.5 * body:
                     self.df.at[self.df.index[i], 'pinbar'] = 'bullish'
                     pinbar_signals.append(self.df['timestamp'].values[i])
-                # Bearish pinbar: long upper wick and a relatively small lower wick.
                 elif upper_wick > 3 * body and lower_wick < 0.5 * body:
                     self.df.at[self.df.index[i], 'pinbar'] = 'bearish'
                     pinbar_signals.append(self.df['timestamp'].values[i])
@@ -327,15 +376,67 @@ class Integration(Synthesis):
 
     def save_whole_df_to_csv(self):
         """
-        Save detected signals to a CSV file.
+        Save the entire analysis DataFrame to a CSV file.
         """
-
         self.df.to_csv("analysis_data.csv")
+        print("Whole analysis data saved to analysis_data.csv")
+
+    def merge_analysis(self, tolerance=3):
+        """
+        Merge signals from different analysis methods using the same style as other defs.
+        For each row (starting at 1), this function checks:
+          - If a pinbar signal is present and the primary RSI is within a given tolerance
+            of any defined RSI level.
+          - If a bullish divergence is detected (timestamp present in bullish_divergences),
+            a valid low pivot exists, and the RSI is near one of the RSI levels.
+          - If a bearish divergence is detected (timestamp present in bearish_divergences),
+            a valid high pivot exists, and the RSI is near one of the RSI levels.
+          - If an engulfing pattern is present and its timestamp is in the respective divergence set.
+        When conditions are met, a merged signal is created in the 'merged_signal' column.
+        """
+        self.df['merged_signal'] = None
+        bullish_div_set = set(self.bullish_divergences)
+        bearish_div_set = set(self.bearish_divergences)
+
+        for i in range(1, len(self.df)):
+            signals = []
+            ts = self.df['timestamp'].values[i]
+            rsi_val = self.df['rsi'].values[i]
+
+            # Check Pinbar + RSI Level
+            if pd.notnull(self.df['pinbar'].values[i]):
+                for level in self.rsi_levels:
+                    if abs(rsi_val - level) <= tolerance:
+                        if self.df['pinbar'].values[i] == 'bullish':
+                            signals.append("merged_buy_pinbar_rsi")
+                        elif self.df['pinbar'].values[i] == 'bearish':
+                            signals.append("merged_sell_pinbar_rsi")
+                        break  # Stop after first match
+
+            # Check Divergence + RSI + Pivots
+            if ts in bullish_div_set:
+                if pd.notnull(self.df['low_pivot'].values[i]) and any(
+                        abs(rsi_val - lvl) <= tolerance for lvl in self.rsi_levels):
+                    signals.append("merged_buy_divergence_rsi")
+            if ts in bearish_div_set:
+                if pd.notnull(self.df['high_pivot'].values[i]) and any(
+                        abs(rsi_val - lvl) <= tolerance for lvl in self.rsi_levels):
+                    signals.append("merged_sell_divergence_rsi")
+
+            # Check Engulfing + Divergence
+            if pd.notnull(self.df['engulfing'].values[i]):
+                if self.df['engulfing'].values[i] == 'bullish' and ts in bullish_div_set:
+                    signals.append("merged_buy_engulfing_divergence")
+                elif self.df['engulfing'].values[i] == 'bearish' and ts in bearish_div_set:
+                    signals.append("merged_sell_engulfing_divergence")
+
+            if signals:
+                self.df.at[self.df.index[i], 'merged_signal'] = ", ".join(signals)
 
     def plot_results(self):
         """
         Plot the candlestick chart with pivot points, signals, divergence markers,
-        as well as engulfing and pinbar patterns.
+        engulfing and pinbar patterns, and merged signals.
         """
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8),
                                        sharex=True,
@@ -385,6 +486,12 @@ class Integration(Synthesis):
                     marker='P', s=100, color='limegreen', label='Bullish Pinbar', edgecolors='black')
         ax1.scatter(mdates.date2num(pinbar_bear['timestamp']), pinbar_bear['close'],
                     marker='P', s=100, color='purple', label='Bearish Pinbar', edgecolors='black')
+
+        # Plot merged signals.
+        merged = self.df[self.df['merged_signal'].notna()]
+        if not merged.empty:
+            ax1.scatter(mdates.date2num(merged['timestamp']), merged['close'],
+                        marker='X', s=120, color='black', label='Merged Signal', edgecolors='yellow')
 
         ax1.set_ylabel("Price (USD)")
         ax1.set_title(f"{self.symbol} Price Chart with Pivots, Signals, & Patterns")
